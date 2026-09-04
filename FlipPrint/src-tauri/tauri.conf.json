@@ -14,9 +14,9 @@
       {
         "title": "FlipPrint - 手动双面打印助手",
         "width": 450,
-        "height": 600,
+        "height": 800,
         "center": true,
-        "resizable": true,
+        "resizable": false,
         "dragDropEnabled": true
       }
     ],

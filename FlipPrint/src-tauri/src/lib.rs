@@ -141,6 +141,11 @@ fn cmd_print_pdf(file_path: String, printer_name: String) -> Result<(), String> 
     {
         use std::process::Command;
 
+        // 检查文件是否存在
+        if !std::path::Path::new(&file_path).exists() {
+            return Err(format!("文件不存在: {}", file_path));
+        }
+
         // 获取 SumatraPDF 路径
         let sumatra_path = std::env::var("LOCALAPPDATA")
             .map(|p| format!("{}\\SumatraPDF\\SumatraPDF.exe", p))
@@ -160,7 +165,7 @@ fn cmd_print_pdf(file_path: String, printer_name: String) -> Result<(), String> 
 
         // 使用 PowerShell 调用 SumatraPDF 打印
         let script = format!(
-            "& '{}' -print-to '{}' '{}'",
+            "& '{}' -print-to \"{}\" \"{}\"",
             sumatra_path,
             printer_name,
             file_path
@@ -210,15 +215,48 @@ pub struct ExtractPagesResult {
 }
 
 #[tauri::command]
-fn cmd_extract_pages(input_path: String, pages: Vec<usize>) -> Result<ExtractPagesResult, String> {
+fn cmd_extract_pages(input_path: String, pages: Vec<usize>, side: u8) -> Result<ExtractPagesResult, String> {
     use pdf_generator::extract_pages;
 
-    let output_path = extract_pages(&input_path, &pages)?;
+    let output_path = extract_pages(&input_path, &pages, side)?;
 
     Ok(ExtractPagesResult {
         output_path,
         page_count: pages.len(),
     })
+}
+
+/// 清理与给定 PDF 同目录下的临时文件
+#[tauri::command]
+fn cmd_cleanup_temp_files(original_path: String) -> Result<(), String> {
+    use std::fs;
+
+    let path_buf = PathBuf::from(&original_path);
+    let stem = path_buf.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let parent = path_buf.parent().unwrap_or(Path::new("."));
+
+    // 需要清理的临时文件模式
+    let temp_patterns = vec![
+        format!("{}_print_0.pdf", stem),
+        format!("{}_print_1.pdf", stem),
+        format!("{}_print_2.pdf", stem),
+        format!("{}_selected.pdf", stem),
+        format!("{}_first.pdf", stem),
+        format!("{}_second.pdf", stem),
+    ];
+
+    for pattern in temp_patterns {
+        let temp_path = parent.join(&pattern);
+        if temp_path.exists() {
+            if let Err(e) = fs::remove_file(&temp_path) {
+                eprintln!("清理临时文件失败: {} - {}", temp_path.display(), e);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -237,6 +275,7 @@ pub fn run() {
             cmd_read_pdf_data,
             cmd_open_in_default_app,
             cmd_extract_pages,
+            cmd_cleanup_temp_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
