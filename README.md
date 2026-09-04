@@ -1,8 +1,8 @@
 # FlipPrint
 
-**Manual Duplex Printing Assistant** — Print double-sided documents without a duplex printer.
+I bought an HP 105W printer, only to find it doesn't support duplex printing. So I built this tool to make manual double-sided printing actually manageable.
 
-> Windows only · Requires SumatraPDF
+🪟 Windows only
 
 ---
 
@@ -30,9 +30,7 @@ Currently, FlipPrint only supports the following printers:
 ## Requirements
 
 - **OS**: Windows 10+
-- **Dependency**: [SumatraPDF](https://www.sumatrapdfreader.org/free-pdf-reader)
-
----
+- **Dependency**: [SumatraPDF](https://www.sumatrapdfreader.org/free-pdf-reader) - required for PDF printing
 
 ## Quick Start
 
