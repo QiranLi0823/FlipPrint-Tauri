@@ -17,24 +17,6 @@
 
 ---
 
-## Screenshots
-
-<div style="display: flex; gap: 24px; flex-wrap: wrap; justify-content: center;">
-
-  <div style="text-align: center; width: 40%;">
-    <img src="picture/01首页.png" alt="Home Page" width="100%" />
-    <p><em>Home Page - Select PDF file</em></p>
-  </div>
-
-  <div style="text-align: center; width: 40%;">
-    <img src="picture/02打印向导页.png" alt="Print Wizard" width="100%" />
-    <p><em>Print Wizard - Step-by-step guide</em></p>
-  </div>
-
-</div>
-
----
-
 ## Supported Printers
 
 Currently, FlipPrint only supports the following printers:
