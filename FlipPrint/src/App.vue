@@ -1,11 +1,11 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 // ==================== 状态管理 ====================
-const currentPage = ref('home'); // home | analysis | step1 | step2 | step3 | complete
+const currentPage = ref('home'); // home | analysis | preview | step1 | step2 | step3 | complete
 
 // PDF 信息
 const pdfInfo = ref({
@@ -15,6 +15,18 @@ const pdfInfo = ref({
   height: 0,
   paperSize: '',
   path: '',
+});
+
+// 已选择的页面数
+const selectedPageCount = ref(0);
+
+// 页面选择状态
+const pageSelection = ref({
+  selected: [],        // 已选择的页面数组
+  pdfDoc: null,        // PDF 文档对象
+  thumbnails: {},      // 缩略图缓存
+  loading: false,
+  loadedPages: 0,      // 已加载的页数
 });
 
 // 打印配置
@@ -96,6 +108,14 @@ async function handleFileSelected(filePath) {
       path: filePath,
     };
 
+    // 初始化选择为全选
+    pageSelection.value.selected = Array.from(
+      { length: result.info.page_count },
+      (_, i) => i + 1
+    );
+    selectedPageCount.value = result.info.page_count;
+    hasVisitedPreview.value = false;
+
     duplexPlan.value = {
       firstPass: result.plan.first_pass,
       secondPass: result.plan.second_pass,
@@ -121,7 +141,33 @@ function startPrinting() {
     // 单面打印：直接打开打印对话框
     openPrintDialog();
   } else {
-    // 双面打印：进入向导
+    // 双面打印：根据选择页面计算双面计划
+    const selected = pageSelection.value.selected;
+    const firstPass = [];
+    const secondPass = [];
+
+    // 遍历选中的页面（按顺序）
+    // 在新提取的PDF中，按顺序位置判断奇偶
+    for (let i = 0; i < selected.length; i++) {
+      const position = i + 1; // 1-based 位置
+      if (position % 2 === 0) {
+        // 偶数位置 -> 第一遍（倒序收集）
+        firstPass.push(selected[i]);
+      } else {
+        // 奇数位置 -> 第二遍
+        secondPass.push(selected[i]);
+      }
+    }
+    // 第一遍需要倒序
+    firstPass.reverse();
+
+    duplexPlan.value = {
+      firstPass,
+      secondPass,
+      sheetCount: Math.ceil(selected.length / 2),
+      pageCount: selected.length,
+    };
+
     currentPage.value = 'step1';
   }
 }
@@ -142,6 +188,8 @@ function goHome() {
   currentPage.value = 'home';
   pdfInfo.value = { filename: '', pageCount: 0, width: 0, height: 0, paperSize: '', path: '' };
   duplexPlan.value = { firstPass: [], secondPass: [], sheetCount: 0, pageCount: 0 };
+  hasVisitedPreview.value = false;
+  selectedPageCount.value = 0;
 }
 
 function goBack() {
@@ -149,17 +197,162 @@ function goBack() {
 }
 
 // 打开打印对话框
-function openPrintDialog() {
-  // 单面打印直接用原文件，双面打印用 secondFile
-  const fileToPrint = printMode.value === 'single' ? pdfInfo.value.path : secondFile.value;
-  alert(`打印文件: ${fileToPrint}\n\n实际打印功能将在后续实现。`);
-  // 打印后进入完成页
-  goToComplete();
+async function openPrintDialog() {
+  try {
+    isLoading.value = true;
+
+    let fileToPrint;
+
+    if (printMode.value === 'single') {
+      // 单面打印：提取选择的页面
+      const result = await invoke('cmd_extract_pages', {
+        inputPath: pdfInfo.value.path,
+        pages: pageSelection.value.selected
+      });
+      fileToPrint = result.output_path;
+    } else {
+      // 双面打印用 secondFile
+      fileToPrint = secondFile.value;
+    }
+
+    await invoke('cmd_print_pdf', {
+      filePath: fileToPrint,
+      printerName: selectedPrinter.value
+    });
+    goToComplete();
+  } catch (e) {
+    console.error('打印失败:', e);
+    errorMessage.value = `打印失败: ${e}`;
+    alert(`打印失败: ${e}`);
+  } finally {
+    isLoading.value = false;
+  }
 }
 
 // 格式化页面顺序
 function formatOrder(pages) {
   return pages.join(' → ');
+}
+
+// ==================== 预览页面功能 ====================
+// 是否已访问过预览页
+const hasVisitedPreview = ref(false);
+
+// 跳转到预览页面（用于手动选择页面）
+function goToPreview() {
+  pageSelection.value.thumbnails = {};
+  pageSelection.value.loadedPages = 0;
+  currentPage.value = 'preview';
+}
+
+// 返回分析页面
+function goBackToAnalysis() {
+  // 如果选择只有1页，自动切换到单面打印
+  if (selectedPageCount.value === 1) {
+    printMode.value = 'single';
+  }
+  currentPage.value = 'analysis';
+}
+
+// 页面选择操作
+function togglePage(pageNum) {
+  const index = pageSelection.value.selected.indexOf(pageNum);
+  if (index > -1) {
+    pageSelection.value.selected.splice(index, 1);
+  } else {
+    pageSelection.value.selected.push(pageNum);
+    pageSelection.value.selected.sort((a, b) => a - b);
+  }
+  selectedPageCount.value = pageSelection.value.selected.length;
+}
+
+function selectAll() {
+  pageSelection.value.selected = Array.from(
+    { length: pdfInfo.value.pageCount },
+    (_, i) => i + 1
+  );
+  selectedPageCount.value = pdfInfo.value.pageCount;
+}
+
+function selectOdd() {
+  const odd = [];
+  for (let i = 1; i <= pdfInfo.value.pageCount; i += 2) {
+    odd.push(i);
+  }
+  pageSelection.value.selected = odd;
+  selectedPageCount.value = odd.length;
+}
+
+function selectEven() {
+  const even = [];
+  for (let i = 2; i <= pdfInfo.value.pageCount; i += 2) {
+    even.push(i);
+  }
+  pageSelection.value.selected = even;
+  selectedPageCount.value = even.length;
+}
+
+function invertSelection() {
+  const all = Array.from({ length: pdfInfo.value.pageCount }, (_, i) => i + 1);
+  pageSelection.value.selected = all.filter(p => !pageSelection.value.selected.includes(p));
+  selectedPageCount.value = pageSelection.value.selected.length;
+}
+
+// 计算属性：已选页数
+function getSelectedCount() {
+  return pageSelection.value.selected.length;
+}
+
+// 格式化页码显示
+function formatPageRange(selected) {
+  if (selected.length === 0) return '无';
+  if (selected.length === pdfInfo.value.pageCount) return '全部';
+  if (selected.length <= 3) return selected.join(', ');
+  return `${selected.length} 页`;
+}
+
+// 计算选中页数对应的纸张数（双面打印）
+function calculateSheetCount(selectedCount) {
+  return Math.ceil(selectedCount / 2);
+}
+
+// 打印选中的页面
+async function printSelected() {
+  if (pageSelection.value.selected.length === 0) {
+    alert('请至少选择一页');
+    return;
+  }
+
+  // 返回分析页面继续
+  goBackToAnalysis();
+}
+
+// 直接开始打印（不返回）
+async function startPrintSelected() {
+  if (pageSelection.value.selected.length === 0) {
+    alert('请至少选择一页');
+    return;
+  }
+
+  try {
+    isLoading.value = true;
+
+    // 调用 Rust 命令生成只包含选中页的 PDF
+    const result = await invoke('cmd_extract_pages', {
+      inputPath: pdfInfo.value.path,
+      pages: pageSelection.value.selected
+    });
+
+    // 打印生成的 PDF
+    await invoke('cmd_print_pdf', { filePath: result.outputPath });
+    goToComplete();
+  } catch (e) {
+    console.error('打印失败:', e);
+    errorMessage.value = `打印失败: ${e}`;
+    alert(`打印失败: ${e}`);
+  } finally {
+    isLoading.value = false;
+  }
 }
 </script>
 
@@ -186,6 +379,11 @@ function formatOrder(pages) {
 
     <!-- ==================== 分析页：配置打印 ==================== -->
     <div v-if="currentPage === 'analysis'" class="page analysis-page">
+      <div v-if="isLoading" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">正在处理...</div>
+      </div>
+
       <div class="header">
         <button class="btn-back" @click="goBack">← 返回</button>
         <span class="filename">📄 {{ pdfInfo.filename }}</span>
@@ -194,6 +392,9 @@ function formatOrder(pages) {
       <div class="pdf-info">
         <div class="info-item">📄 {{ pdfInfo.pageCount }} 页</div>
         <div class="info-item">📐 {{ pdfInfo.paperSize }}</div>
+        <button class="btn-preview" @click="goToPreview">
+          📑 选择页面
+        </button>
       </div>
 
       <div class="section">
@@ -203,13 +404,22 @@ function formatOrder(pages) {
             <input type="radio" v-model="printMode" value="single" />
             <span>单面打印</span>
           </label>
-          <label class="radio-option" :class="{ active: printMode === 'duplex' }">
-            <input type="radio" v-model="printMode" value="duplex" />
+          <label
+            class="radio-option"
+            :class="{ active: printMode === 'duplex', disabled: selectedPageCount < 2 }"
+          >
+            <input
+              type="radio"
+              v-model="printMode"
+              value="duplex"
+              :disabled="selectedPageCount < 2"
+            />
             <span>手动双面打印</span>
+            <span v-if="selectedPageCount < 2" class="radio-hint">(需要2页以上)</span>
           </label>
         </div>
         <div v-if="printMode === 'duplex'" class="hint">
-          预计需要 {{ duplexPlan.sheetCount }} 张纸
+          预计需要 {{ calculateSheetCount(selectedPageCount) }} 张纸
         </div>
       </div>
 
@@ -225,6 +435,57 @@ function formatOrder(pages) {
       <button class="btn-primary" @click="startPrinting">
         {{ printMode === 'single' ? '开始打印' : '开始打印向导' }}
       </button>
+    </div>
+
+    <!-- ==================== 预览页面：选择要打印的页面 ==================== -->
+    <div v-if="currentPage === 'preview'" class="page preview-page">
+      <div class="header">
+        <button class="btn-back" @click="goBackToAnalysis">← 返回</button>
+        <span class="filename">📄 {{ pdfInfo.filename }}</span>
+        <span class="selected-count">已选 {{ getSelectedCount() }} / {{ pdfInfo.pageCount }} 页</span>
+      </div>
+
+      <!-- 快捷操作 -->
+      <div class="quick-actions">
+        <button class="quick-btn" @click="selectAll">全选</button>
+        <button class="quick-btn" @click="selectOdd">奇数页</button>
+        <button class="quick-btn" @click="selectEven">偶数页</button>
+        <button class="quick-btn" @click="invertSelection">反选</button>
+      </div>
+
+      <!-- 页面网格 -->
+      <div class="page-grid">
+        <div
+          v-for="page in pdfInfo.pageCount"
+          :key="page"
+          class="page-item"
+          :class="{ selected: pageSelection.selected.includes(page) }"
+          @click="togglePage(page)"
+        >
+          <div class="page-thumb">
+            <span class="page-placeholder">{{ page }}</span>
+          </div>
+          <div class="page-number">第 {{ page }} 页</div>
+          <div class="page-check">
+            {{ pageSelection.selected.includes(page) ? '☑️' : '⬜' }}
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部操作栏 -->
+      <div class="preview-footer">
+        <div class="selected-info">
+          已选择 {{ formatPageRange(pageSelection.selected) }}
+        </div>
+        <div class="footer-buttons">
+          <button class="btn-secondary" @click="printSelected">
+            ✓ 确定
+          </button>
+          <button class="btn-primary" @click="startPrintSelected">
+            直接打印 {{ getSelectedCount() }} 页
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- ==================== 步骤 1：打印第一面 ==================== -->
@@ -484,6 +745,21 @@ body {
   background: #eff6ff;
 }
 
+.radio-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.radio-option.disabled:hover {
+  background: white;
+}
+
+.radio-hint {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-left: 4px;
+}
+
 .radio-option input[type="radio"] {
   width: 20px;
   height: 20px;
@@ -653,5 +929,328 @@ body {
   font-size: 18px;
   color: #1f2937;
   margin-bottom: 32px;
+}
+
+/* ==================== PDF 预览样式 ==================== */
+.btn-preview {
+  background: #10b981;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.btn-preview:hover {
+  background: #059669;
+}
+
+.pdf-preview-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #1f2937;
+  color: white;
+}
+
+.preview-title {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.preview-close {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: #374151;
+  color: white;
+}
+
+.preview-btn {
+  background: #4b5563;
+  border: none;
+  color: white;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.preview-btn:hover:not(:disabled) {
+  background: #6b7280;
+}
+
+.preview-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.zoom-level {
+  font-size: 14px;
+  min-width: 50px;
+  text-align: center;
+}
+
+.page-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.page-info {
+  color: white;
+  font-size: 14px;
+  min-width: 80px;
+  text-align: center;
+}
+
+.preview-container {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 20px;
+  background: #111827;
+}
+
+.preview-canvas-container {
+  background: #f0f0f0;
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+}
+
+.preview-canvas {
+  display: block;
+  background: white;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.preview-iframe-container {
+  width: 100%;
+  height: 100%;
+}
+
+.preview-iframe {
+  width: 100%;
+  height: 100%;
+  min-height: 80vh;
+  border: none;
+  background: white;
+}
+
+.preview-object {
+  width: 100%;
+  height: 100%;
+  min-height: 80vh;
+  border: none;
+  background: white;
+}
+
+.preview-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+  color: #9ca3af;
+  font-size: 16px;
+}
+
+/* ==================== 预览页面样式 ==================== */
+.preview-page {
+  padding: 16px;
+}
+
+.preview-page .header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selected-count {
+  background: #3b82f6;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.quick-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.quick-btn {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.quick-btn:hover {
+  background: #e5e7eb;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 12px;
+  max-height: 55vh;
+  overflow-y: auto;
+  padding: 4px;
+  background: #f9fafb;
+  border-radius: 8px;
+}
+
+.page-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px;
+  background: white;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 2px solid transparent;
+}
+
+.page-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.page-item.selected {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.page-thumb {
+  width: 80px;
+  height: 110px;
+  background: #f3f4f6;
+  border-radius: 4px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.page-placeholder {
+  font-size: 24px;
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+.page-number {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 2px;
+}
+
+.page-check {
+  font-size: 16px;
+}
+
+.preview-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: white;
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.footer-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.footer-buttons .btn-primary,
+.footer-buttons .btn-secondary {
+  width: auto;
+  padding: 12px 20px;
+}
+
+.preview-footer .btn-primary {
+  width: auto;
+  padding: 12px 24px;
+}
+
+.selected-info {
+  color: #6b7280;
+  font-size: 14px;
+}
+
+/* ==================== 加载动画 ==================== */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+
+.loading-spinner {
+  width: 50px;
+  height: 50px;
+  border: 4px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  margin-top: 16px;
+  color: #6b7280;
+  font-size: 14px;
 }
 </style>

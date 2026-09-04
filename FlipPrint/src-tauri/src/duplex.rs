@@ -78,6 +78,51 @@ pub fn format_page_order(pages: &[usize]) -> String {
         .join(" → ")
 }
 
+/// 根据选中的页面计算双面打印计划
+///
+/// pages: 用户选择的页面数组（如 [1, 3, 4, 5] 表示选择第 1,3,4,5 页）
+/// 返回：针对选中页面的双面打印计划
+pub fn calculate_duplex_for_selection(selected_pages: &[usize]) -> DuplexPlan {
+    let count = selected_pages.len();
+    if count == 0 {
+        return DuplexPlan {
+            first_pass: vec![],
+            second_pass: vec![],
+            sheet_count: 0,
+            page_count: 0,
+        };
+    }
+
+    // 选中的页面已经是排好序的
+    // 计算每个选中页面在新文档中的位置（用于确定奇偶）
+    let mut first_pass = Vec::new();
+    let mut second_pass = Vec::new();
+
+    for (idx, &page) in selected_pages.iter().enumerate() {
+        let new_position = idx + 1; // 1-based
+        if new_position % 2 == 0 {
+            // 偶数位置 -> 第一遍
+            first_pass.push(page);
+        } else {
+            // 奇数位置 -> 第二遍
+            second_pass.push(page);
+        }
+    }
+
+    // 第一遍需要倒序
+    first_pass.reverse();
+
+    // 纸张数
+    let sheet_count = (count + 1) / 2;
+
+    DuplexPlan {
+        first_pass,
+        second_pass,
+        sheet_count,
+        page_count: count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
