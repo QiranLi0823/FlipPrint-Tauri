@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 // ==================== 状态管理 ====================
 const currentPage = ref('home'); // home | analysis | preview | step1 | step2 | step3 | complete
+const isInitializing = ref(true); // 初始加载状态
 
 // PDF 信息
 const pdfInfo = ref({
@@ -60,6 +61,8 @@ onMounted(async () => {
     console.error('获取打印机失败:', e);
     printers.value = ['默认打印机'];
     selectedPrinter.value = '默认打印机';
+  } finally {
+    isInitializing.value = false;
   }
 
   // 监听拖拽事件
@@ -440,8 +443,14 @@ async function startPrintSelected() {
 
 <template>
   <div class="app">
+    <!-- 初始加载界面 -->
+    <div v-if="isInitializing" class="init-loading">
+      <div class="init-spinner"></div>
+      <div class="init-text">加载中...</div>
+    </div>
+
     <!-- ==================== 首页：拖入 PDF ==================== -->
-    <div v-if="currentPage === 'home'" class="page home-page">
+    <div v-else-if="currentPage === 'home'" class="page home-page">
       <h1 class="app-title">FlipPrint</h1>
       <p class="app-tagline">手动双面打印助手</p>
 
@@ -755,6 +764,34 @@ body {
   padding: 24px;
   display: flex;
   flex-direction: column;
+}
+
+/* 初始加载界面 */
+.init-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+}
+
+.init-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #E9ECEF;
+  border-top-color: #E76F51;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.init-text {
+  color: #6B7280;
+  font-size: 14px;
 }
 
 /* ==================== 首页 ==================== */

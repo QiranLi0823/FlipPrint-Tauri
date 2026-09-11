@@ -1,8 +1,9 @@
 //! PDF 分析模块
 //!
-//! 使用 Python pypdf 库获取真实的页数
+//! 使用 Python pypdf 分析 PDF
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::process::Command;
 
 /// PDF 文件信息
@@ -16,19 +17,88 @@ pub struct PdfInfo {
     pub paper_size: String,
 }
 
+/// 获取 Python 可执行文件路径
+/// 优先使用 bundled Python
+fn get_python_exe() -> String {
+    // 获取可执行文件所在目录
+    if let Ok(exe_path) = std::env::current_exe() {
+        eprintln!("[DEBUG] exe_path: {:?}", exe_path);
+
+        // 尝试 exe所在目录/python/python.exe
+        if let Some(exe_dir) = exe_path.parent() {
+            let bundled_python = exe_dir.join("python").join("python.exe");
+            eprintln!("[DEBUG] checking: {:?}", bundled_python);
+            if bundled_python.exists() {
+                eprintln!("[DEBUG] found bundled python!");
+                return bundled_python.to_string_lossy().to_string();
+            }
+
+            // 尝试 exe所在目录/bundle/python/python.exe
+            let bundle_python = exe_dir.join("bundle").join("python").join("python.exe");
+            eprintln!("[DEBUG] checking: {:?}", bundle_python);
+            if bundle_python.exists() {
+                eprintln!("[DEBUG] found bundled python in bundle!");
+                return bundle_python.to_string_lossy().to_string();
+            }
+        }
+    }
+    eprintln!("[DEBUG] using system python");
+    // 回退到系统 Python
+    "python".to_string()
+}
+
 /// 分析 PDF 文件
 pub fn analyze_pdf(path: &str) -> Result<PdfInfo, String> {
-    // 使用 Python pypdf 获取真实的页数
-    let page_count = get_pdf_page_count(path);
+    let path_obj = Path::new(path);
 
-    if page_count == 0 {
-        return Err("无法获取 PDF 页数，请确保已安装 pypdf: pip install pypdf".to_string());
+    if !path_obj.exists() {
+        return Err(format!("文件不存在: {}", path));
     }
 
-    // 获取纸张尺寸 (默认 A4)
-    let (width, height, paper_size) = get_paper_size_default();
+    // 转义路径中的单引号
+    let escaped_path = path.replace("\\", "\\\\").replace("'", "''");
 
-    let filename = std::path::Path::new(path)
+    // 使用 pypdf 获取页数
+    let script = format!(
+        r#"
+from pypdf import PdfReader
+reader = PdfReader(r'{}')
+print(len(reader.pages))
+"#,
+        escaped_path
+    );
+
+    let python_exe = get_python_exe();
+    let output = Command::new(&python_exe)
+        .args(["-B", "-c", &script])
+        .output()
+        .map_err(|e| format!("执行 Python 失败: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    // 检查 stderr 中是否有真正的错误（不是警告）
+    if stderr.contains("Error") || stderr.contains("Exception") || stderr.contains("Traceback") {
+        if stderr.contains("No module") || stderr.contains("ModuleNotFoundError") || stderr.contains("ImportError") {
+            return Err("pypdf 未安装。请运行: pip install pypdf".to_string());
+        }
+        return Err(format!("Python 错误: {}", stderr));
+    }
+
+    // 取最后一行作为页数（前面的行可能是警告）
+    let last_line = stdout.lines().last().unwrap_or("").trim();
+
+    // 检查输出是否是数字
+    let page_count: usize = match last_line.parse() {
+        Ok(n) => n,
+        Err(_) => return Err(format!("无法解析页数: '{}'", stdout)),
+    };
+
+    if page_count == 0 {
+        return Err("PDF 没有页面".to_string());
+    }
+
+    let filename = path_obj
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown.pdf")
@@ -38,42 +108,8 @@ pub fn analyze_pdf(path: &str) -> Result<PdfInfo, String> {
         path: path.to_string(),
         filename,
         page_count,
-        width,
-        height,
-        paper_size,
+        width: 210.0,
+        height: 297.0,
+        paper_size: "A4".to_string(),
     })
-}
-
-/// 使用 Python pypdf 获取 PDF 页数
-fn get_pdf_page_count(path: &str) -> usize {
-    let escaped_path = path.replace("\\", "\\\\").replace("'", "''");
-
-    let script = format!(
-        r#"
-try:
-    from pypdf import PdfReader
-    reader = PdfReader(r'{}')
-    print(len(reader.pages))
-except Exception as e:
-    print(0)
-"#,
-        escaped_path
-    );
-
-    let output = Command::new("python")
-        .args(["-c", &script])
-        .output();
-
-    match output {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            stdout.parse().unwrap_or(0)
-        }
-        Err(_) => 0,
-    }
-}
-
-/// 获取纸张尺寸 (默认 A4)
-fn get_paper_size_default() -> (f32, f32, String) {
-    (210.0, 297.0, "A4".to_string())
 }

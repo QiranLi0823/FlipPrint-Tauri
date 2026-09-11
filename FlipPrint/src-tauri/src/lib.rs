@@ -93,7 +93,7 @@ fn cmd_get_default_printer() -> String {
     {
         use std::process::Command;
         let output = Command::new("powershell")
-            .args(["-Command", "Get-CimInstance Win32_Printer | Where-Object {$_.Default -eq $true} | Select-Object -ExpandProperty Name"])
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Printer | Where-Object {$_.Default -eq $true} | Select-Object -ExpandProperty Name"])
             .output();
 
         if let Ok(output) = output {
@@ -114,7 +114,7 @@ fn cmd_get_printers() -> Vec<String> {
     {
         use std::process::Command;
         let output = Command::new("powershell")
-            .args(["-Command", "Get-CimInstance Win32_Printer | Select-Object -ExpandProperty Name"])
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Printer | Select-Object -ExpandProperty Name"])
             .output();
 
         if let Ok(output) = output {

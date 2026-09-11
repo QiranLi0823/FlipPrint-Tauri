@@ -30,7 +30,9 @@ Currently, FlipPrint only supports the following printers:
 ## Requirements
 
 - **OS**: Windows 10+
-- **Dependency**: [SumatraPDF](https://www.sumatrapdfreader.org/free-pdf-reader) - required for PDF printing
+- **Software**:
+  - [SumatraPDF](https://www.sumatrapdfreader.org/free-pdf-reader) - for printing
+  - Python with pypdf - for PDF processing (`pip install pypdf`)
 
 ## Quick Start
 
