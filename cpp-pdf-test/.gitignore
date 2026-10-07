@@ -1,0 +1,47 @@
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build directories
+build/
+Debug/
+Release/
+x64/
+x86/
+Win32/
+
+# Compiled files
+*.exe
+*.dll
+*.so
+*.dylib
+
+# vcpkg (如果有独立的)
+vcpkg_installed/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# PDF output (测试生成的)
+output/
