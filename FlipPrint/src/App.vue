@@ -25,10 +25,6 @@ const selectedPageCount = ref(0);
 // 页面选择状态
 const pageSelection = ref({
   selected: [],        // 已选择的页面数组
-  pdfDoc: null,        // PDF 文档对象
-  thumbnails: {},      // 缩略图缓存
-  loading: false,
-  loadedPages: 0,      // 已加载的页数
 });
 
 // 打印配置
@@ -54,10 +50,28 @@ const errorMessage = ref('');
 
 // ==================== 初始化 ====================
 onMounted(async () => {
-  isInitializing.value = false;  // 先显示界面，不阻塞
+  initStatus.value = 'Initializing...';
 
-  // 打印机列表延迟加载，不阻塞启动
-  loadPrinters();
+  // 并行加载打印机列表
+  try {
+    const [printersList, defaultPrinter] = await Promise.all([
+      invoke('cmd_get_printers'),
+      invoke('cmd_get_default_printer')
+    ]);
+    printers.value = printersList;
+    selectedPrinter.value = defaultPrinter;
+  } catch (e) {
+    console.error('获取打印机失败:', e);
+    printers.value = ['默认打印机'];
+    selectedPrinter.value = '默认打印机';
+  }
+
+  initStatus.value = 'Ready';
+
+  // 延迟隐藏加载界面，让用户看到 Ready 状态
+  setTimeout(() => {
+    isInitializing.value = false;
+  }, 300);
 
   // 监听拖拽事件
   await listen('tauri://drag-drop', async (event) => {
@@ -70,26 +84,6 @@ onMounted(async () => {
     }
   });
 });
-
-// 延迟加载打印机列表
-async function loadPrinters() {
-  initStatus.value = 'Loading printers...';
-  try {
-    printers.value = await invoke('cmd_get_printers');
-    selectedPrinter.value = await invoke('cmd_get_default_printer');
-    initStatus.value = 'Ready';
-  } catch (e) {
-    console.error('获取打印机失败:', e);
-    printers.value = ['默认打印机'];
-    selectedPrinter.value = '默认打印机';
-    initStatus.value = 'Ready (default printer)';
-  } finally {
-    // 延迟隐藏加载界面，让用户看到 Ready 状态
-    setTimeout(() => {
-      isInitializing.value = false;
-    }, 500);
-  }
-}
 
 // ==================== 文件处理 ====================
 async function selectFile() {
@@ -158,20 +152,17 @@ function startPrinting() {
     // 单面打印：直接打开打印对话框
     openPrintDialog();
   } else {
-    // 双面打印：根据选择页面计算双面计划
+    // 双面打印：使用后端计算的双面计划（基于当前选择的页面重新计算）
+    // 注意：如果用户修改了页面选择，需要重新计算
     const selected = pageSelection.value.selected;
     const firstPass = [];
     const secondPass = [];
 
-    // 遍历选中的页面（按顺序）
-    // 在新提取的PDF中，按顺序位置判断奇偶
     for (let i = 0; i < selected.length; i++) {
-      const position = i + 1; // 1-based 位置
+      const position = i + 1;
       if (position % 2 === 0) {
-        // 偶数位置 -> 第一遍（倒序收集）
         firstPass.push(selected[i]);
       } else {
-        // 奇数位置 -> 第二遍
         secondPass.push(selected[i]);
       }
     }
@@ -218,13 +209,22 @@ function goHome() {
   cleanupTempFiles();
   currentPage.value = 'home';
   pdfInfo.value = { filename: '', pageCount: 0, width: 0, height: 0, paperSize: '', path: '' };
+  pageSelection.value.selected = [];
+  selectedPageCount.value = 0;
   duplexPlan.value = { firstPass: [], secondPass: [], sheetCount: 0, pageCount: 0 };
   hasVisitedPreview.value = false;
-  selectedPageCount.value = 0;
+  errorMessage.value = '';
 }
 
 function goBack() {
+  // 清理状态并返回首页
+  cleanupTempFiles();
   currentPage.value = 'home';
+  pdfInfo.value = { filename: '', pageCount: 0, width: 0, height: 0, paperSize: '', path: '' };
+  pageSelection.value.selected = [];
+  selectedPageCount.value = 0;
+  duplexPlan.value = { firstPass: [], secondPass: [], sheetCount: 0, pageCount: 0 };
+  errorMessage.value = '';
 }
 
 // 打开打印对话框
@@ -332,8 +332,6 @@ const savedPageSelection = ref([]);
 function goToPreview() {
   // 保存当前选择
   savedPageSelection.value = [...pageSelection.value.selected];
-  pageSelection.value.thumbnails = {};
-  pageSelection.value.loadedPages = 0;
   currentPage.value = 'preview';
 }
 
@@ -398,14 +396,6 @@ function getSelectedCount() {
   return pageSelection.value.selected.length;
 }
 
-// 格式化页码显示
-function formatPageRange(selected) {
-  if (selected.length === 0) return '无';
-  if (selected.length === pdfInfo.value.pageCount) return '全部';
-  if (selected.length <= 3) return selected.join(', ');
-  return `${selected.length} 页`;
-}
-
 // 计算选中页数对应的纸张数（双面打印）
 function calculateSheetCount(selectedCount) {
   return Math.ceil(selectedCount / 2);
@@ -443,7 +433,7 @@ async function startPrintSelected() {
     });
 
     // 打印生成的 PDF
-    await invoke('cmd_print_pdf', { filePath: result.outputPath });
+    await invoke('cmd_print_pdf', { filePath: result.output_path });
     goToComplete();
   } catch (e) {
     console.error('打印失败:', e);
