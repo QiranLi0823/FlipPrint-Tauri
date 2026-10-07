@@ -1,4 +1,5 @@
 mod duplex;
+mod pdf_ffi;
 mod pdf_analyzer;
 mod pdf_generator;
 
@@ -215,10 +216,10 @@ pub struct ExtractPagesResult {
 }
 
 #[tauri::command]
-fn cmd_extract_pages(input_path: String, pages: Vec<usize>, side: u8) -> Result<ExtractPagesResult, String> {
+fn cmd_extract_pages(input_path: String, pages: Vec<usize>, _side: u8) -> Result<ExtractPagesResult, String> {
     use pdf_generator::extract_pages;
 
-    let output_path = extract_pages(&input_path, &pages, side)?;
+    let output_path = extract_pages(&input_path, &pages)?;
 
     Ok(ExtractPagesResult {
         output_path,

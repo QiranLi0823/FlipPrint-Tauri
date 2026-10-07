@@ -11,10 +11,15 @@
 # Build directories
 FlipPrint/src-tauri/target/
 cpp-pdf-test/build/
+cpp-pdf-test/build_dll/
 
 # Python embedded (如果使用 Python 版本)
 python-embed/
 FlipPrint/src-tauri/target/release/python/
+
+# Portable packages
+FlipPrint-portable/
+FlipPrint-portable.zip
 
 # IDE
 .vscode/
