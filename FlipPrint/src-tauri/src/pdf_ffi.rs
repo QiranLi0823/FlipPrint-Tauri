@@ -5,6 +5,7 @@
 use std::ffi::{c_char, c_int, c_float};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use libloading::{Library, Symbol};
 
 /// PDF 信息结构体 (对应 C 端的 PdfInfo)
@@ -48,45 +49,45 @@ impl From<PdfInfoRaw> for PdfInfo {
     }
 }
 
-// DLL 加载器
-struct PdfLibrary {
-    lib: Library,
-}
+// 延迟加载的 DLL 实例（全局缓存）
+static PDF_LIB: OnceLock<Result<Library, String>> = OnceLock::new();
 
-impl PdfLibrary {
-    fn new() -> Result<Self, String> {
-        // 尝试多个可能的 DLL 路径
-        let possible_paths = [
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.join("pdf_dll.dll")))
-                .map(|p| p.to_string_lossy().into_owned()),
-            Some("dll/pdf_dll.dll".to_string()),
-            std::env::var("CARGO_MANIFEST_DIR")
-                .ok()
-                .map(|p| format!("{}\\dll\\pdf_dll.dll", p)),
-        ];
+fn get_dll() -> Result<&'static Library, String> {
+    PDF_LIB
+        .get_or_init(|| {
+            let possible_paths = [
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|p| p.join("pdf_dll.dll")))
+                    .map(|p| p.to_string_lossy().into_owned()),
+                Some("dll/pdf_dll.dll".to_string()),
+                std::env::var("CARGO_MANIFEST_DIR")
+                    .ok()
+                    .map(|p| format!("{}\\dll\\pdf_dll.dll", p)),
+            ];
 
-        for dll_path in possible_paths.iter().flatten() {
-            if !std::path::Path::new(dll_path).exists() {
-                continue;
+            for dll_path in possible_paths.iter().flatten() {
+                if !std::path::Path::new(dll_path).exists() {
+                    continue;
+                }
+
+                match unsafe { Library::new(dll_path) } {
+                    Ok(lib) => {
+                        return Ok(lib);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load {}: {}", dll_path, e);
+                    }
+                }
             }
 
-            match unsafe { Library::new(dll_path) } {
-                Ok(lib) => {
-                    return Ok(PdfLibrary { lib });
-                }
-                Err(e) => {
-                    eprintln!("Failed to load {}: {}", dll_path, e);
-                }
-            }
-        }
-
-        Err(format!(
-            "Failed to load PDF DLL. Tried paths: {:?}",
-            possible_paths
-        ))
-    }
+            Err(format!(
+                "Failed to load PDF DLL. Tried: {:?}",
+                possible_paths
+            ))
+        })
+        .as_ref()
+        .map_err(|e| e.clone())
 }
 
 fn get_error_from_dll(lib: &Library) -> Option<String> {
@@ -112,44 +113,33 @@ fn has_non_ascii(path: &str) -> bool {
 }
 
 /// 创建临时副本，使用ASCII文件名
-fn create_temp_copy(path: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
+fn create_temp_copy(path: &Path) -> Result<PathBuf, String> {
     if !has_non_ascii(&path.to_string_lossy()) {
-        // 路径已经是ASCII，直接返回
-        return Ok((path.to_path_buf(), None));
+        return Ok(path.to_path_buf());
     }
 
-    // 创建临时目录
     let temp_dir = std::env::temp_dir().join("flipprint_pdf");
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
 
-    // 生成ASCII文件名
-    let extension = path.extension().unwrap_or_default().to_string_lossy();
-    let temp_name = format!("pdf_input_{}.{}", uuid_simple(), extension);
-    let temp_path = temp_dir.join(&temp_name);
-
-    // 复制文件
-    fs::copy(path, &temp_path).map_err(|e| format!("Failed to copy file: {}", e))?;
-
-    // 返回临时路径和清理函数
-    Ok((temp_path, Some(temp_dir)))
-}
-
-/// 生成简单UUID
-fn uuid_simple() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!("{:x}", nanos)
+    let temp_name = format!("{:x}.pdf", nanos);
+    let temp_path = temp_dir.join(&temp_name);
+
+    fs::copy(path, &temp_path)
+        .map_err(|e| format!("Failed to copy file: {}", e))?;
+
+    Ok(temp_path)
 }
 
 /// 分析 PDF 文件
 pub fn analyze_pdf(path: &str) -> Result<PdfInfo, String> {
-    let lib = PdfLibrary::new()?;
+    let lib = get_dll()?;
 
-    // 如果路径包含中文，创建临时副本
-    let (work_path, temp_dir) = create_temp_copy(Path::new(path))?;
+    let work_path = create_temp_copy(Path::new(path))?;
 
     let mut info = PdfInfoRaw {
         path: [0; 512],
@@ -165,7 +155,7 @@ pub fn analyze_pdf(path: &str) -> Result<PdfInfo, String> {
 
     unsafe {
         let func: Symbol<unsafe extern "C" fn(*const c_char, *mut PdfInfoRaw) -> bool> =
-            lib.lib.get(b"pdf_analyze")
+            lib.get(b"pdf_analyze")
                 .map_err(|e| format!("Function not found: {}", e))?;
 
         let result = func(path_c.as_ptr(), &mut info);
@@ -173,28 +163,28 @@ pub fn analyze_pdf(path: &str) -> Result<PdfInfo, String> {
         if result {
             Ok(PdfInfo::from(info))
         } else {
-            Err(get_error_from_dll(&lib.lib).unwrap_or_else(|| "Unknown error".to_string()))
+            Err(get_error_from_dll(lib).unwrap_or_else(|| "Unknown error".to_string()))
         }
     }
 }
 
 /// 获取 PDF 页数
 pub fn get_page_count(path: &str) -> Result<usize, String> {
-    let lib = PdfLibrary::new()?;
+    let lib = get_dll()?;
 
-    let (work_path, _temp_dir) = create_temp_copy(Path::new(path))?;
+    let work_path = create_temp_copy(Path::new(path))?;
     let path_c = std::ffi::CString::new(work_path.to_string_lossy().as_ref())
         .map_err(|e| e.to_string())?;
 
     unsafe {
         let func: Symbol<unsafe extern "C" fn(*const c_char) -> c_int> =
-            lib.lib.get(b"pdf_get_page_count")
+            lib.get(b"pdf_get_page_count")
                 .map_err(|e| format!("Function not found: {}", e))?;
 
         let count = func(path_c.as_ptr());
 
         if count < 0 {
-            Err(get_error_from_dll(&lib.lib).unwrap_or_else(|| "Unknown error".to_string()))
+            Err(get_error_from_dll(lib).unwrap_or_else(|| "Unknown error".to_string()))
         } else {
             Ok(count as usize)
         }
@@ -207,9 +197,9 @@ pub fn extract_pages<P: AsRef<Path>>(
     pages: &[usize],
     output_path: P,
 ) -> Result<String, String> {
-    let lib = PdfLibrary::new()?;
+    let lib = get_dll()?;
 
-    let (work_input_path, _temp_dir) = create_temp_copy(Path::new(input_path))?;
+    let work_input_path = create_temp_copy(Path::new(input_path))?;
 
     let input_c = std::ffi::CString::new(work_input_path.to_string_lossy().as_ref())
         .map_err(|e| e.to_string())?;
@@ -221,7 +211,7 @@ pub fn extract_pages<P: AsRef<Path>>(
     unsafe {
         let func: Symbol<
             unsafe extern "C" fn(*const c_char, *const c_int, c_int, *const c_char) -> bool,
-        > = lib.lib
+        > = lib
             .get(b"pdf_extract_pages")
             .map_err(|e| format!("Function not found: {}", e))?;
 
@@ -235,7 +225,7 @@ pub fn extract_pages<P: AsRef<Path>>(
         if result {
             Ok(output_path.as_ref().to_string_lossy().into_owned())
         } else {
-            Err(get_error_from_dll(&lib.lib).unwrap_or_else(|| "Unknown error".to_string()))
+            Err(get_error_from_dll(lib).unwrap_or_else(|| "Unknown error".to_string()))
         }
     }
 }
@@ -246,9 +236,9 @@ pub fn split_duplex<P: AsRef<Path>>(
     input_path: &str,
     output_folder: P,
 ) -> Result<(String, String), String> {
-    let lib = PdfLibrary::new()?;
+    let lib = get_dll()?;
 
-    let (work_input_path, _temp_dir) = create_temp_copy(Path::new(input_path))?;
+    let work_input_path = create_temp_copy(Path::new(input_path))?;
 
     let input_c = std::ffi::CString::new(work_input_path.to_string_lossy().as_ref())
         .map_err(|e| e.to_string())?;
@@ -262,7 +252,7 @@ pub fn split_duplex<P: AsRef<Path>>(
         let func: Symbol<
             unsafe extern "C" fn(*const c_char, *const c_char, *mut c_char, *mut c_char)
                 -> bool,
-        > = lib.lib
+        > = lib
             .get(b"pdf_split_duplex")
             .map_err(|e| format!("Function not found: {}", e))?;
 
@@ -282,7 +272,7 @@ pub fn split_duplex<P: AsRef<Path>>(
                 .into_owned();
             Ok((first, second))
         } else {
-            Err(get_error_from_dll(&lib.lib).unwrap_or_else(|| "Unknown error".to_string()))
+            Err(get_error_from_dll(lib).unwrap_or_else(|| "Unknown error".to_string()))
         }
     }
 }

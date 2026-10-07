@@ -53,7 +53,9 @@ void PdfGenerator::copyPages(const std::string& inputPath,
                 keepIndices.push_back(static_cast<unsigned>(idx));
             }
         }
-        std::sort(keepIndices.begin(), keepIndices.end());
+        // 保持原始顺序，不要排序！
+        // 移除排序：std::sort(keepIndices.begin(), keepIndices.end());
+        // 注意：这里假设页面索引已经是有效的（0-based）
         keepIndices.erase(std::unique(keepIndices.begin(), keepIndices.end()), keepIndices.end());
 
         // Create destination document and initialize page tree

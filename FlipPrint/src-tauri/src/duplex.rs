@@ -48,10 +48,10 @@ pub fn calculate_duplex(page_count: usize) -> DuplexPlan {
     }
 
     // 第一遍：偶数页倒序 (N, N-2, ..., 4, 2)
-    let first_pass: Vec<usize> = (1..=page_count)
+    let mut first_pass: Vec<usize> = (1..=page_count)
         .filter(|&x| x % 2 == 0)  // 过滤出偶数
-        .rev()                     // 倒序
         .collect();
+    first_pass.reverse();  // 倒序
 
     // 第二遍：奇数页正序 (1, 3, 5, ..., N)
     let second_pass: Vec<usize> = (1..=page_count)
