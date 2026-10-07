@@ -7,6 +7,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 // ==================== 状态管理 ====================
 const currentPage = ref('home'); // home | analysis | preview | step1 | step2 | step3 | complete
 const isInitializing = ref(true); // 初始加载状态
+const initStatus = ref('Starting...'); // 初始化状态文本
 
 // PDF 信息
 const pdfInfo = ref({
@@ -53,17 +54,10 @@ const errorMessage = ref('');
 
 // ==================== 初始化 ====================
 onMounted(async () => {
-  // 获取打印机列表
-  try {
-    printers.value = await invoke('cmd_get_printers');
-    selectedPrinter.value = await invoke('cmd_get_default_printer');
-  } catch (e) {
-    console.error('获取打印机失败:', e);
-    printers.value = ['默认打印机'];
-    selectedPrinter.value = '默认打印机';
-  } finally {
-    isInitializing.value = false;
-  }
+  isInitializing.value = false;  // 先显示界面，不阻塞
+
+  // 打印机列表延迟加载，不阻塞启动
+  loadPrinters();
 
   // 监听拖拽事件
   await listen('tauri://drag-drop', async (event) => {
@@ -76,6 +70,26 @@ onMounted(async () => {
     }
   });
 });
+
+// 延迟加载打印机列表
+async function loadPrinters() {
+  initStatus.value = 'Loading printers...';
+  try {
+    printers.value = await invoke('cmd_get_printers');
+    selectedPrinter.value = await invoke('cmd_get_default_printer');
+    initStatus.value = 'Ready';
+  } catch (e) {
+    console.error('获取打印机失败:', e);
+    printers.value = ['默认打印机'];
+    selectedPrinter.value = '默认打印机';
+    initStatus.value = 'Ready (default printer)';
+  } finally {
+    // 延迟隐藏加载界面，让用户看到 Ready 状态
+    setTimeout(() => {
+      isInitializing.value = false;
+    }, 500);
+  }
+}
 
 // ==================== 文件处理 ====================
 async function selectFile() {
@@ -446,7 +460,8 @@ async function startPrintSelected() {
     <!-- 初始加载界面 -->
     <div v-if="isInitializing" class="init-loading">
       <div class="init-spinner"></div>
-      <div class="init-text">加载中...</div>
+      <div class="init-text">Loading FlipPrint...</div>
+      <div class="init-status">{{ initStatus }}</div>
     </div>
 
     <!-- ==================== 首页：拖入 PDF ==================== -->
@@ -792,6 +807,12 @@ body {
 .init-text {
   color: #6B7280;
   font-size: 14px;
+}
+
+.init-status {
+  color: #9CA3AF;
+  font-size: 12px;
+  margin-top: 8px;
 }
 
 /* ==================== 首页 ==================== */
