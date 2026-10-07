@@ -3,7 +3,8 @@
 //! 通过运行时动态加载 C++ PDF DLL
 
 use std::ffi::{c_char, c_int, c_float};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use libloading::{Library, Symbol};
 
 /// PDF 信息结构体 (对应 C 端的 PdfInfo)
@@ -56,14 +57,11 @@ impl PdfLibrary {
     fn new() -> Result<Self, String> {
         // 尝试多个可能的 DLL 路径
         let possible_paths = [
-            // 相对于可执行文件
             std::env::current_exe()
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.join("pdf_dll.dll")))
                 .map(|p| p.to_string_lossy().into_owned()),
-            // 相对于当前工作目录
             Some("dll/pdf_dll.dll".to_string()),
-            // src-tauri/dll 目录（开发时）
             std::env::var("CARGO_MANIFEST_DIR")
                 .ok()
                 .map(|p| format!("{}\\dll\\pdf_dll.dll", p)),
@@ -79,7 +77,6 @@ impl PdfLibrary {
                     return Ok(PdfLibrary { lib });
                 }
                 Err(e) => {
-                    // 继续尝试下一个路径
                     eprintln!("Failed to load {}: {}", dll_path, e);
                 }
             }
@@ -109,9 +106,50 @@ fn get_error_from_dll(lib: &Library) -> Option<String> {
     }
 }
 
+/// 检查路径是否包含非ASCII字符
+fn has_non_ascii(path: &str) -> bool {
+    !path.chars().all(|c| c.is_ascii())
+}
+
+/// 创建临时副本，使用ASCII文件名
+fn create_temp_copy(path: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
+    if !has_non_ascii(&path.to_string_lossy()) {
+        // 路径已经是ASCII，直接返回
+        return Ok((path.to_path_buf(), None));
+    }
+
+    // 创建临时目录
+    let temp_dir = std::env::temp_dir().join("flipprint_pdf");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+
+    // 生成ASCII文件名
+    let extension = path.extension().unwrap_or_default().to_string_lossy();
+    let temp_name = format!("pdf_input_{}.{}", uuid_simple(), extension);
+    let temp_path = temp_dir.join(&temp_name);
+
+    // 复制文件
+    fs::copy(path, &temp_path).map_err(|e| format!("Failed to copy file: {}", e))?;
+
+    // 返回临时路径和清理函数
+    Ok((temp_path, Some(temp_dir)))
+}
+
+/// 生成简单UUID
+fn uuid_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{:x}", nanos)
+}
+
 /// 分析 PDF 文件
 pub fn analyze_pdf(path: &str) -> Result<PdfInfo, String> {
     let lib = PdfLibrary::new()?;
+
+    // 如果路径包含中文，创建临时副本
+    let (work_path, temp_dir) = create_temp_copy(Path::new(path))?;
 
     let mut info = PdfInfoRaw {
         path: [0; 512],
@@ -122,7 +160,8 @@ pub fn analyze_pdf(path: &str) -> Result<PdfInfo, String> {
         paper_size: [0; 64],
     };
 
-    let path_c = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+    let path_c = std::ffi::CString::new(work_path.to_string_lossy().as_ref())
+        .map_err(|e| e.to_string())?;
 
     unsafe {
         let func: Symbol<unsafe extern "C" fn(*const c_char, *mut PdfInfoRaw) -> bool> =
@@ -142,7 +181,10 @@ pub fn analyze_pdf(path: &str) -> Result<PdfInfo, String> {
 /// 获取 PDF 页数
 pub fn get_page_count(path: &str) -> Result<usize, String> {
     let lib = PdfLibrary::new()?;
-    let path_c = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+
+    let (work_path, _temp_dir) = create_temp_copy(Path::new(path))?;
+    let path_c = std::ffi::CString::new(work_path.to_string_lossy().as_ref())
+        .map_err(|e| e.to_string())?;
 
     unsafe {
         let func: Symbol<unsafe extern "C" fn(*const c_char) -> c_int> =
@@ -166,10 +208,13 @@ pub fn extract_pages<P: AsRef<Path>>(
     output_path: P,
 ) -> Result<String, String> {
     let lib = PdfLibrary::new()?;
-    let input_c = std::ffi::CString::new(input_path).map_err(|e| e.to_string())?;
-    let output_c =
-        std::ffi::CString::new(output_path.as_ref().to_string_lossy().as_ref())
-            .map_err(|e| e.to_string())?;
+
+    let (work_input_path, _temp_dir) = create_temp_copy(Path::new(input_path))?;
+
+    let input_c = std::ffi::CString::new(work_input_path.to_string_lossy().as_ref())
+        .map_err(|e| e.to_string())?;
+    let output_c = std::ffi::CString::new(output_path.as_ref().to_string_lossy().as_ref())
+        .map_err(|e| e.to_string())?;
 
     let pages_int: Vec<c_int> = pages.iter().map(|&p| p as c_int).collect();
 
@@ -202,7 +247,11 @@ pub fn split_duplex<P: AsRef<Path>>(
     output_folder: P,
 ) -> Result<(String, String), String> {
     let lib = PdfLibrary::new()?;
-    let input_c = std::ffi::CString::new(input_path).map_err(|e| e.to_string())?;
+
+    let (work_input_path, _temp_dir) = create_temp_copy(Path::new(input_path))?;
+
+    let input_c = std::ffi::CString::new(work_input_path.to_string_lossy().as_ref())
+        .map_err(|e| e.to_string())?;
     let folder_c = std::ffi::CString::new(output_folder.as_ref().to_string_lossy().as_ref())
         .map_err(|e| e.to_string())?;
 
