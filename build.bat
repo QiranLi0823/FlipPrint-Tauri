@@ -7,9 +7,9 @@ echo.
 
 cd /d "%~dp0FlipPrint"
 
-REM Set DLL source directory (C++ build output)
+REM Set DLL source and destination directories
 set DLL_SOURCE=%~dp0cpp-pdf-test\dll_output\Release
-set DLL_DEST=%~dp0src-tauri\dll
+set DLL_DEST=%~dp0FlipPrint\src-tauri\dll
 
 echo [1/4] Installing npm dependencies...
 call npm install
