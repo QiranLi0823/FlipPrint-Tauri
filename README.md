@@ -1,6 +1,6 @@
-# FlipPrint
+# FlipPrint v0.1.0-beta
 
-I bought an HP 105W printer, only to find it doesn't support duplex printing. So I built this tool to make manual double-sided printing actually manageable.
+A manual duplex printing assistant for Windows. Simply drag in your PDF, and FlipPrint calculates the correct page order for two-sided printing—no more guessing which way to flip your pages.
 
 🪟 Windows only
 
@@ -8,62 +8,73 @@ I bought an HP 105W printer, only to find it doesn't support duplex printing. So
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| Select PDF | Drag & drop or click to select |
-| Page Selection | All / Odd / Even / Invert |
-| Single-Sided Print | Print selected pages directly |
-| Duplex Print | Wizard: Print front → Flip → Print back |
+- **Automatic Page Ordering** — Calculates the correct even/odd page sequence for manual duplex printing
+- **Page Selection** — All pages, odd pages, even pages, or custom selection
+- **Step-by-Step Wizard** — Guides you through: Print front → Flip paper → Print back
+- **Portable** — No installation required, just run the .exe
 
 ---
 
 ## Supported Printers
 
-Currently, FlipPrint only supports the following printers:
-- HP 105
-- HP 105W
-
-> Note: Other printers may work, but have not been tested.
+Tested on HP 105/105W. Other printers may work but are untested.
 
 ---
 
 ## Requirements
 
 - **OS**: Windows 10+
-- **Software**:
-  - [SumatraPDF](https://www.sumatrapdfreader.org/free-pdf-reader) - for printing
-  - Python with pypdf - for PDF processing (`pip install pypdf`)
+- **Software**: SumatraPDF (for printing, auto-detected)
+
+---
 
 ## Quick Start
 
+### Pre-built Release
+
+Download the portable release from the releases page:
+1. Extract the ZIP
+2. Run `FlipPrint.exe`
+
+### Build from Source
+
 ```bash
-# Install dependencies
-npm install
+# Build C++ PDF DLL (requires Visual Studio)
+cd cpp-pdf-test
+build_dll.bat
 
-# Run in dev mode
-npm run tauri dev
+# Build FlipPrint
+cd ..
+build.bat
 
-# Build for production
-npm run tauri build
+# Package portable release
+pack_portable.bat
 ```
 
 ---
 
-## Project Status
+## How Manual Duplex Works
 
-### ✅ Completed
-- PDF file selection (drag & drop / dialog)
-- PDF analysis (page count, paper size)
-- Page selection interface
-- Single-sided printing
-- Duplex printing wizard
-- Printer selection
-- Temporary file cleanup
+For a 6-page PDF, FlipPrint calculates:
 
-### 🔄 In Progress
-- PDF thumbnail preview
+| Pass | Pages to Print | Order |
+|------|----------------|-------|
+| 1st (Front) | 6, 4, 2 | Reverse |
+| 2nd (Back) | 1, 3, 5 | Forward |
 
-### 📋 Planned
-- Print history
-- Settings persistence
-- macOS/Linux support
+After printing the front side, flip the paper stack and load it back for the second pass. When folded, pages will read in correct order.
+
+---
+
+## Tech Stack
+
+- **Frontend**: Vue 3 + Vite
+- **Backend**: Tauri (Rust)
+- **PDF Processing**: PoDoFo (C++ DLL via FFI)
+- **Printing**: SumatraPDF
+
+---
+
+## License
+
+MIT
